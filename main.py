@@ -1,11 +1,14 @@
 import sys
 import datetime
+
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit, QPushButton,
                              QVBoxLayout, QHBoxLayout, QMessageBox, QGridLayout,
-                             QTableWidget, QTableWidgetItem, QComboBox, QMainWindow, QSizePolicy)
-from PyQt5.QtCore import Qt, pyqtSignal
+                             QTableWidget, QTableWidgetItem, QComboBox, QMainWindow, QSizePolicy, QTabWidget,
+                             QFormLayout, QDateTimeEdit, QDialog, QSplitter)
+from PyQt5.QtCore import Qt, pyqtSignal, QDateTime
 import psycopg2
-import hashlib
+from psycopg2 import extras
 
 # Конфигурация подключения к базе данных
 DB_CONFIG = {
@@ -181,6 +184,51 @@ class DatabaseManager:
         self.conn.commit()
         cursor.close()
         return count
+
+    def execute_query(self, query, params=None, fetch=False):
+        """
+        Выполняет SQL-запрос к базе данных.
+
+        Args:
+            query (str): SQL-запрос для выполнения
+            params (tuple, optional): Параметры для запроса
+            fetch (bool, optional): Если True, возвращает результат запроса
+
+        Returns:
+            list/None: Результат запроса, если fetch=True, иначе None
+        """
+        cursor = None
+        try:
+            # Создание курсора
+            cursor = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+            # Выполнение запроса
+            cursor.execute(query, params or ())
+
+            # Получение результата, если требуется
+            result = None
+            if fetch:
+                result = cursor.fetchall()
+
+            # Фиксация изменений
+            self.conn.commit()
+
+            return result
+
+        except psycopg2.Error as e:
+            # Откат изменений в случае ошибки
+            self.conn.rollback()
+
+            # Логирование ошибки
+            print(f"Ошибка выполнения запроса: {e}")
+
+            # Пробрасывание ошибки выше для обработки в вызывающем коде
+            raise e
+
+        finally:
+            # Закрытие курсора
+            if cursor:
+                cursor.close()
 
 class LoginWindow(QWidget):
     def __init__(self, db_manager):
@@ -360,6 +408,12 @@ class PasswordChangeWindow(QWidget):
             QMessageBox.warning(self, 'Ошибка', message)
 
 class AdminMainWindow(QMainWindow):
+    def __init__(self, db_manager, user):
+        super().__init__()
+        self.db_manager = db_manager
+        self.user = user
+        self.init_ui()
+
     def init_ui(self):
         self.setWindowTitle('Панель администратора')
         self.setMinimumSize(800, 600)
@@ -520,9 +574,10 @@ class UserMainWindow(QMainWindow):
         self.user = user
         self.init_ui()
 
+
     def init_ui(self):
         self.setWindowTitle('Личный кабинет')
-        self.setMinimumSize(600, 400)
+        self.setMinimumSize(800, 600)
 
         # Центральный виджет
         central_widget = QWidget()
@@ -553,10 +608,100 @@ class UserMainWindow(QMainWindow):
         self.change_password_button.clicked.connect(self.show_change_password_dialog)
         main_layout.addWidget(self.change_password_button)
 
-        # Пустой растягивающийся элемент для выравнивания
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        main_layout.addWidget(spacer)
+        # Вкладки
+        tabs = QTabWidget()
+        main_layout.addWidget(tabs)
+
+        # Вкладка для добавления постояльца
+        guest_tab = QWidget()
+        guest_layout = QVBoxLayout(guest_tab)
+        tabs.addTab(guest_tab, "Добавление постояльца")
+
+        # Форма добавления постояльца
+        guest_form_layout = QFormLayout()
+
+        self.name_input = QLineEdit()
+        guest_form_layout.addRow("Имя:", self.name_input)
+
+        self.surname_input = QLineEdit()
+        guest_form_layout.addRow("Фамилия:", self.surname_input)
+
+        self.patronymic_input = QLineEdit()
+        self.patronymic_input.setPlaceholderText("Необязательно")
+        guest_form_layout.addRow("Отчество", self.patronymic_input)
+
+        self.mobile_input = QLineEdit()
+        self.mobile_input.setPlaceholderText("Необязательно")
+        guest_form_layout.addRow("Мобильный телефон:", self.mobile_input)
+
+        self.passport_input = QLineEdit()
+        guest_form_layout.addRow("Паспорт:", self.passport_input)
+
+        guest_layout.addLayout(guest_form_layout)
+
+        self.add_guest_button = QPushButton("Добавить постояльца")
+        self.add_guest_button.clicked.connect(self.add_guest)
+        guest_layout.addWidget(self.add_guest_button)
+
+        # Вкладка для бронирования и комнат
+        booking_tab = QWidget()
+        booking_layout = QVBoxLayout(booking_tab)
+        tabs.addTab(booking_tab, "Бронирование комнат")
+
+        # Сплиттер для разделения формы бронирования и таблицы комнат
+        splitter = QSplitter(Qt.Vertical)
+        booking_layout.addWidget(splitter)
+
+        # Верхняя часть - форма бронирования
+        booking_form_widget = QWidget()
+        booking_form_layout = QFormLayout(booking_form_widget)
+
+        self.guest_combobox = QComboBox()
+        self.update_guest_combobox()
+        booking_form_layout.addRow("Постоялец:", self.guest_combobox)
+
+        self.check_in_date = QDateTimeEdit(QDateTime.currentDateTime())
+        self.check_in_date.setCalendarPopup(True)
+        booking_form_layout.addRow("Дата и время заселения:", self.check_in_date)
+
+        self.check_out_date = QDateTimeEdit(QDateTime.currentDateTime().addDays(1))
+        self.check_out_date.setCalendarPopup(True)
+        booking_form_layout.addRow("Дата и время выселения:", self.check_out_date)
+
+        # Кнопка для поиска доступных комнат
+        self.find_rooms_button = QPushButton("Найти доступные комнаты")
+        self.find_rooms_button.clicked.connect(self.find_available_rooms)
+        booking_form_layout.addRow("", self.find_rooms_button)
+
+        splitter.addWidget(booking_form_widget)
+
+        # Нижняя часть - таблица комнат
+        rooms_widget = QWidget()
+        rooms_layout = QVBoxLayout(rooms_widget)
+
+        # Таблица комнат
+        self.rooms_table = QTableWidget()
+        self.rooms_table.setColumnCount(4)
+        self.rooms_table.setHorizontalHeaderLabels(["Этаж", "Номер", "Категория","ID"])
+        self.rooms_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.rooms_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.rooms_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.rooms_table.setColumnHidden(3, True)  # Скрываем колонку с ID
+
+        rooms_layout.addWidget(self.rooms_table)
+
+        # Кнопка для бронирования выбранной комнаты
+        self.book_room_button = QPushButton("Забронировать выбранную комнату")
+        self.book_room_button.clicked.connect(self.book_room)
+        rooms_layout.addWidget(self.book_room_button)
+
+        splitter.addWidget(rooms_widget)
+
+        # Устанавливаем начальные размеры сплиттера
+        splitter.setSizes([200, 400])
+
+        # Обновить список комнат
+        self.update_rooms_table()
 
         self.setCentralWidget(central_widget)
 
@@ -564,6 +709,430 @@ class UserMainWindow(QMainWindow):
         self.password_change_window = PasswordChangeWindow(self.db_manager, self.user['id'])
         self.password_change_window.show()
 
+    def add_guest(self):
+        name = self.name_input.text()
+        surname = self.surname_input.text()
+        patronymic = self.patronymic_input.text() or None
+
+        # Проверяем, ввел ли пользователь мобильный телефон
+        mobile_text = self.mobile_input.text()
+        mobile = int(mobile_text) if mobile_text else None
+
+        passport_text = self.passport_input.text()
+
+        # Валидация данных
+        if not name or not surname or not passport_text:
+            QMessageBox.warning(self, "Ошибка", "Имя, фамилия и паспорт обязательны для заполнения")
+            return
+
+        try:
+            passport = int(passport_text)
+        except ValueError:
+            QMessageBox.warning(self, "Ошибка", "Паспорт должен содержать только цифры")
+            return
+
+        # Добавление гостя в базу данных
+        try:
+            query = """
+            INSERT INTO guest (name, surname, patronymic, mobile, passport)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """
+            result = self.db_manager.execute_query(query, (name, surname, patronymic, mobile, passport), fetch=True)
+
+            if result:
+                QMessageBox.information(self, "Успех", "Постоялец успешно добавлен")
+                # Очистить поля формы
+                self.name_input.clear()
+                self.surname_input.clear()
+                self.patronymic_input.clear()
+                self.mobile_input.clear()
+                self.passport_input.clear()
+
+                # Обновить список гостей в комбобоксе
+                self.update_guest_combobox()
+            else:
+                QMessageBox.warning(self, "Ошибка", "Не удалось добавить постояльца")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при добавлении постояльца: {str(e)}")
+
+    def update_guest_combobox(self):
+        try:
+            # Очистить текущий список
+            self.guest_combobox.clear()
+
+            # Получить всех гостей из базы данных
+            query = """
+                    SELECT id, name, surname, patronymic, passport 
+                    FROM guest 
+                    ORDER BY surname, name
+                    """
+            guests = self.db_manager.execute_query(query, fetch=True)
+
+            # Заполнить комбобокс
+            for guest in guests:
+                # Формируем строку для отображения
+                patronymic_str = f" {guest['patronymic']}" if guest['patronymic'] else ""
+                display_text = f"{guest['surname']} {guest['name']}{patronymic_str} (паспорт: {guest['passport']})"
+
+                # Сохраняем ID гостя в userRole
+                self.guest_combobox.addItem(display_text, guest['id'])
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить список постояльцев: {str(e)}")
+
+    def show_room_selection(self):
+        # Проверяем, выбран ли гость
+        if self.guest_combobox.count() == 0:
+            QMessageBox.warning(self, "Ошибка", "Нет доступных постояльцев. Сначала добавьте постояльца.")
+            return
+
+        # Проверяем даты
+        check_in = self.check_in_date.dateTime().toPyDateTime()
+        check_out = self.check_out_date.dateTime().toPyDateTime()
+
+        if check_in >= check_out:
+            QMessageBox.warning(self, "Ошибка", "Дата выселения должна быть позже даты заселения")
+            return
+
+        # Сохраняем данные для бронирования
+        self.current_guest_id = self.guest_combobox.currentData()
+        self.current_check_in = check_in
+        self.current_check_out = check_out
+
+        # Обновляем таблицу комнат с учетом выбранных дат
+        self.update_rooms_table()
+
+        # Переключаемся на вкладку с комнатами
+        tab_widget = self.findChild(QTabWidget)
+        if tab_widget:
+            tab_widget.setCurrentIndex(2)  # Индекс вкладки "Комнаты"
+
+    def update_rooms_table(self):
+        try:
+            # Очистить таблицу
+            self.rooms_table.setRowCount(0)
+
+            self.rooms_table.setColumnCount(4)
+            self.rooms_table.setHorizontalHeaderLabels(["Этаж", "Номер", "Категория", "ID"])
+
+            query = """
+                    SELECT id, floor, number, category
+                    FROM room 
+                    ORDER BY floor, number
+                    """
+            rooms = self.db_manager.execute_query(query, fetch=True)
+
+            # Заполнить таблицу
+            for row, room in enumerate(rooms):
+                self.rooms_table.insertRow(row)
+
+                # Заполняем ячейки таблицы
+                self.rooms_table.setItem(row, 0, QTableWidgetItem(str(room['floor'])))
+                self.rooms_table.setItem(row, 1, QTableWidgetItem(str(room['number'])))
+                self.rooms_table.setItem(row, 2, QTableWidgetItem(room['category']))
+
+                # Сохраняем ID комнаты в скрытых данных
+                self.rooms_table.setItem(row, 3, QTableWidgetItem(str(room['id'])))
+
+            # Скрыть колонку с ID
+            self.rooms_table.setColumnHidden(3, True)
+
+            # Растянуть колонки по содержимому
+            self.rooms_table.resizeColumnsToContents()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить список комнат: {str(e)}")
+
+    def find_available_rooms(self):
+        # Проверяем, выбран ли гость
+        if self.guest_combobox.count() == 0:
+            QMessageBox.warning(self, "Ошибка", "Нет доступных постояльцев. Сначала добавьте постояльца.")
+            return
+
+        # Получаем выбранного гостя
+        self.current_guest_id = self.guest_combobox.currentData()
+
+        # Получаем даты заселения и выселения
+        check_in = self.check_in_date.dateTime().toPyDateTime()
+        check_out = self.check_out_date.dateTime().toPyDateTime()
+        print(check_in, check_out)
+
+        # Проверяем корректность дат
+        if check_in >= check_out:
+            QMessageBox.warning(self, "Ошибка", "Дата выселения должна быть позже даты заселения")
+            return
+
+        # Сохраняем даты для использования при бронировании
+        self.current_check_in = check_in
+        self.current_check_out = check_out
+
+        # Обновляем таблицу комнат с учетом выбранных дат
+        try:
+            # Очистить таблицу
+            self.rooms_table.setRowCount(0)
+
+            # Получаем список комнат, которые не заняты в выбранный период
+            query = """
+            SELECT r.id, r.floor, r.number, r.category
+            FROM room r
+            WHERE NOT EXISTS (
+                SELECT 1 FROM reservation res
+                WHERE res.id_room = r.id
+                AND res.status = 'активно'
+                AND (
+                    (%s >= res.check_in_time AND %s <= res.check_out_time) OR
+                    (res.check_in_time >= %s AND res.check_out_time <= %s) OR
+                    (%s < res.check_out_time AND %s > res.check_in_time)
+                )
+            )
+            ORDER BY r.floor, r.number
+            """
+
+            rooms = self.db_manager.execute_query(
+                query,
+                (check_in, check_out,
+                 check_in, check_out,
+                 check_in, check_out),
+                fetch=True
+            )
+
+            # Заполняем таблицу доступными комнатами
+            for row, room in enumerate(rooms):
+                self.rooms_table.insertRow(row)
+
+                # Заполняем ячейки таблицы
+                self.rooms_table.setItem(row, 0, QTableWidgetItem(str(room['floor'])))
+                self.rooms_table.setItem(row, 1, QTableWidgetItem(str(room['number'])))
+                self.rooms_table.setItem(row, 2, QTableWidgetItem(room['category']))
+
+                # Сохраняем ID комнаты в скрытом столбце
+                self.rooms_table.setItem(row, 3, QTableWidgetItem(str(room['id'])))
+
+            # Растянуть колонки по содержимому
+            self.rooms_table.resizeColumnsToContents()
+
+            # Показываем сообщение о результатах поиска
+            if self.rooms_table.rowCount() == 0:
+                QMessageBox.information(self, "Результаты поиска", "Нет доступных комнат на выбранные даты")
+            else:
+                QMessageBox.information(self, "Результаты поиска",
+                                        f"Найдено {self.rooms_table.rowCount()} доступных комнат")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось найти доступные комнаты: {str(e)}")
+
+    def book_room(self):
+        try:
+            # Проверяем, выбрана ли комната
+            selected_rows = self.rooms_table.selectionModel().selectedRows()
+            if not selected_rows:
+                QMessageBox.warning(self, "Ошибка", "Выберите комнату для бронирования")
+                return
+
+            # Проверяем, заполнены ли данные для бронирования
+            if self.current_guest_id is None or not hasattr(self, 'current_check_in') or not hasattr(self,
+                                                                                                     'current_check_out'):
+                QMessageBox.warning(self, "Ошибка", "Сначала выполните поиск доступных комнат")
+                return
+
+            # Получаем данные выбранной комнаты
+            row = selected_rows[0].row()
+
+            # Проверяем наличие элементов
+            room_id_item = self.rooms_table.item(row, 3)
+            if not room_id_item:
+                QMessageBox.warning(self, "Ошибка", "Не удалось получить ID комнаты")
+                return
+
+            room_id = int(room_id_item.text())
+        except Exception as e:
+            print(e)
+
+        try:
+            # Создаем новое бронирование
+            query = """
+            INSERT INTO reservation (id_room, id_guest, check_in_time, check_out_time, status)
+            VALUES (%s, %s, %s, %s, 'активно')
+            RETURNING id
+            """
+            result = self.db_manager.execute_query(
+                query,
+                (room_id, self.current_guest_id, self.current_check_in, self.current_check_out),
+                fetch=True
+            )
+
+            if result:
+                # Обновляем список доступных комнат
+                self.find_available_rooms()
+
+                # Сообщение об успешном бронировании
+                QMessageBox.information(self, "Успех", "Бронирование успешно создано")
+            else:
+                QMessageBox.warning(self, "Ошибка", "Не удалось создать бронирование")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при бронировании: {str(e)}")
+
+    def update_guest_combobox(self):
+        try:
+            # Очистить текущий список
+            self.guest_combobox.clear()
+
+            # Получить всех гостей из базы данных
+            query = """
+                    SELECT id, name, surname, patronymic, passport 
+                    FROM guest 
+                    ORDER BY surname, name
+                    """
+            guests = self.db_manager.execute_query(query, fetch=True)
+
+            # Заполнить комбобокс
+            for guest in guests:
+                # Формируем строку для отображения
+                patronymic_str = f" {guest['patronymic']}" if guest['patronymic'] else ""
+                display_text = f"{guest['surname']} {guest['name']}{patronymic_str} (паспорт: {guest['passport']})"
+
+                # Сохраняем ID гостя в userData
+                self.guest_combobox.addItem(display_text, guest['id'])
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить список постояльцев: {str(e)}")
+
+    def update_rooms_table(self):
+        try:
+            # Очистить таблицу
+            self.rooms_table.setRowCount(0)
+
+            # Получить все комнаты из базы данных
+            query = """
+                    SELECT id, floor, number, category, status 
+                    FROM room 
+                    ORDER BY floor, number
+                    """
+            rooms = self.db_manager.execute_query(query, fetch=True)
+
+            # Заполнить таблицу
+            for row, room in enumerate(rooms):
+                self.rooms_table.insertRow(row)
+
+                # Заполняем ячейки таблицы
+                self.rooms_table.setItem(row, 0, QTableWidgetItem(str(room['floor'])))
+                self.rooms_table.setItem(row, 1, QTableWidgetItem(str(room['number'])))
+                self.rooms_table.setItem(row, 2, QTableWidgetItem(room['category']))
+
+                status_item = QTableWidgetItem(room['status'])
+
+                # Устанавливаем цвет фона в зависимости от статуса
+                if room['status'].lower() in ['занята', 'занят']:
+                    status_item.setBackground(QColor(255, 200, 200))  # бледно-красный
+                elif room['status'].lower() == 'свободен':
+                    status_item.setBackground(QColor(200, 255, 200))  # бледно-зеленый
+                elif room['status'].lower() in ['грязный', 'назначен к уборке']:
+                    status_item.setBackground(QColor(222, 184, 135))  # бледно-коричневый
+
+                self.rooms_table.setItem(row, 3, status_item)
+
+                # Сохраняем ID комнаты в скрытом столбце
+                self.rooms_table.setItem(row, 4, QTableWidgetItem(str(room['id'])))
+
+            # Растянуть колонки по содержимому
+            self.rooms_table.resizeColumnsToContents()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить список комнат: {str(e)}")
+
+    class PasswordChangeWindow(QDialog):
+        def __init__(self, db_manager, user_id):
+            super().__init__()
+            self.db_manager = db_manager
+            self.user_id = user_id
+            self.init_ui()
+
+        def init_ui(self):
+            self.setWindowTitle('Смена пароля')
+            self.setMinimumWidth(300)
+
+            layout = QVBoxLayout()
+
+            # Поля для ввода паролей
+            form_layout = QFormLayout()
+
+            self.current_password = QLineEdit()
+            self.current_password.setEchoMode(QLineEdit.Password)
+            form_layout.addRow("Текущий пароль:", self.current_password)
+
+            self.new_password = QLineEdit()
+            self.new_password.setEchoMode(QLineEdit.Password)
+            form_layout.addRow("Новый пароль:", self.new_password)
+
+            self.confirm_password = QLineEdit()
+            self.confirm_password.setEchoMode(QLineEdit.Password)
+            form_layout.addRow("Подтвердите пароль:", self.confirm_password)
+
+            layout.addLayout(form_layout)
+
+            # Кнопки
+            buttons_layout = QHBoxLayout()
+
+            self.cancel_button = QPushButton("Отмена")
+            self.cancel_button.clicked.connect(self.reject)
+            buttons_layout.addWidget(self.cancel_button)
+
+            self.save_button = QPushButton("Сохранить")
+            self.save_button.clicked.connect(self.change_password)
+            buttons_layout.addWidget(self.save_button)
+
+            layout.addLayout(buttons_layout)
+
+            self.setLayout(layout)
+
+        def change_password(self):
+            current_password = self.current_password.text()
+            new_password = self.new_password.text()
+            confirm_password = self.confirm_password.text()
+
+            # Проверка на пустые поля
+            if not current_password or not new_password or not confirm_password:
+                QMessageBox.warning(self, "Ошибка", "Все поля должны быть заполнены")
+                return
+
+            # Проверка совпадения паролей
+            if new_password != confirm_password:
+                QMessageBox.warning(self, "Ошибка", "Новый пароль и подтверждение не совпадают")
+                return
+
+            try:
+                # Проверка текущего пароля
+                check_query = """
+                SELECT password FROM users WHERE id = %s
+                """
+                result = self.db_manager.execute_query(check_query, (self.user_id,), fetch=True)
+
+                if not result or not check_password(current_password, result[0]['password']):
+                    QMessageBox.warning(self, "Ошибка", "Неверный текущий пароль")
+                    return
+
+                # Обновление пароля
+                update_query = """
+                UPDATE users SET password = %s WHERE id = %s
+                """
+                self.db_manager.execute_query(update_query, (new_password, self.user_id))
+
+                QMessageBox.information(self, "Успех", "Пароль успешно изменен")
+                self.accept()
+
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при смене пароля: {str(e)}")
+
+# Вспомогательные функции для работы с паролями
+def hash_password(password):
+    # Здесь должна быть реализация хеширования пароля
+    # Например, с использованием bcrypt или другой библиотеки
+    return password  # Это просто заглушка
+
+def check_password(password, hashed_password):
+    # Здесь должна быть реализация проверки пароля
+    # Соответствующая используемому алгоритму хеширования
+    return password == hashed_password  # Это просто заглушка
 def main():
     app = QApplication(sys.argv)
 
