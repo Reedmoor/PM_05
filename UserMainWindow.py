@@ -434,13 +434,109 @@ class UserMainWindow(QMainWindow):
 
     def mark_room_as_cleaned(self, room_id):
         try:
-            # Простой запрос на обновление статуса номера с "грязный" на "свободный"
-            update_query = "UPDATE room SET status = 'свободный' WHERE id = %s"
-            self.db_manager.execute_query(update_query, (room_id,))
+            # Создаем диалог для выбора уборщика
+            cleaner_dialog = QDialog(self)
+            cleaner_dialog.setWindowTitle("Выбор сотрудника для уборки")
+            cleaner_dialog.setMinimumWidth(300)
+            dialog_layout = QVBoxLayout()
 
-            # Обновляем список
-            self.load_dirty_rooms()
-            QMessageBox.information(self, "Успех", "Номер отмечен как убранный")
+            # Заголовок
+            header_label = QLabel("Выберите сотрудника, который выполнил уборку:")
+            dialog_layout.addWidget(header_label)
+
+            # Таблица с сотрудниками
+            cleaners_table = QTableWidget()
+            cleaners_table.setColumnCount(3)
+            cleaners_table.setHorizontalHeaderLabels(["ID", "Имя", "Фамилия"])
+            cleaners_table.setSelectionBehavior(QTableWidget.SelectRows)
+            cleaners_table.setSelectionMode(QTableWidget.SingleSelection)
+            cleaners_table.setEditTriggers(QTableWidget.NoEditTriggers)
+            cleaners_table.setColumnHidden(0, True)  # Скрываем ID
+            cleaners_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+            # Получаем список сотрудников из БД
+            query = "SELECT id, name, surname FROM public.employee ORDER BY surname, name"
+            cleaners = self.db_manager.execute_query(query, fetch=True)
+
+            # Заполняем таблицу
+            if cleaners:
+                for i, cleaner in enumerate(cleaners):
+                    cleaners_table.insertRow(i)
+
+                    # Обработка результата в зависимости от его типа (кортеж или словарь)
+                    if isinstance(cleaner, dict):
+                        cleaner_id = cleaner['id']
+                        name = cleaner['name']
+                        surname = cleaner['surname']
+                    else:  # Если результат - кортеж
+                        cleaner_id = cleaner[0]
+                        name = cleaner[1]
+                        surname = cleaner[2]
+
+                    cleaners_table.setItem(i, 0, QTableWidgetItem(str(cleaner_id)))
+                    cleaners_table.setItem(i, 1, QTableWidgetItem(name))
+                    cleaners_table.setItem(i, 2, QTableWidgetItem(surname))
+
+            dialog_layout.addWidget(cleaners_table)
+
+            # Кнопки
+            button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            button_box.accepted.connect(cleaner_dialog.accept)
+            button_box.rejected.connect(cleaner_dialog.reject)
+            dialog_layout.addWidget(button_box)
+
+            cleaner_dialog.setLayout(dialog_layout)
+
+            # Показываем диалог и обрабатываем результат
+            if cleaner_dialog.exec_() == QDialog.Accepted:
+                # Проверяем, выбран ли сотрудник
+                selected_rows = cleaners_table.selectionModel().selectedRows()
+                if not selected_rows:
+                    QMessageBox.warning(self, "Предупреждение", "Сотрудник не выбран")
+                    return
+
+                # Получаем ID выбранного сотрудника
+                selected_row = selected_rows[0].row()
+                cleaner_id_item = cleaners_table.item(selected_row, 0)
+                cleaner_id = int(cleaner_id_item.text())
+
+                # Получаем имя и фамилию для отображения в сообщении
+                cleaner_name = cleaners_table.item(selected_row, 1).text()
+                cleaner_surname = cleaners_table.item(selected_row, 2).text()
+
+                # Обновляем статус номера на "свободный"
+                update_query = "UPDATE room SET status = 'свободный' WHERE id = %s"
+                self.db_manager.execute_query(update_query, (room_id,))
+
+                # Записываем информацию об уборке (если есть соответствующая таблица)
+                try:
+                    # Проверяем, существует ли таблица cleaning_log
+                    check_table_query = """
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'cleaning_log'
+                    )
+                    """
+                    table_exists = self.db_manager.execute_query(check_table_query, fetch=True)
+
+                    # Если таблица существует, добавляем запись
+                    if table_exists and table_exists[0][0]:
+                        insert_log_query = """
+                        INSERT INTO cleaning_log (room_id, employee_id, cleaning_date)
+                        VALUES (%s, %s, CURRENT_TIMESTAMP)
+                        """
+                        self.db_manager.execute_query(insert_log_query, (room_id, cleaner_id))
+                except Exception as e:
+                    print(f"Ошибка при записи лога уборки: {e}")
+                    # Продолжаем выполнение, даже если запись лога не удалась
+
+                # Обновляем список грязных номеров
+                self.load_dirty_rooms()
+
+                # Показываем сообщение об успехе
+                QMessageBox.information(self, "Успех",
+                                        f"Номер отмечен как убранный. Уборку выполнил: {cleaner_name} {cleaner_surname}")
 
         except Exception as e:
             # Выводим подробную информацию об ошибке
