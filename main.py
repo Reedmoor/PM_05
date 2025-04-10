@@ -147,7 +147,7 @@ class DatabaseManager:
 
         # Добавляем пользователя
         cursor.execute(
-            "INSERT INTO users (login, password, role, password_change_required) VALUES (%s, %s, %s, TRUE)",
+            "INSERT INTO users (login, password, role, password_change_required, last_login) VALUES (%s, %s, %s, TRUE, NOW())",
             (login, password, role)
         )
 
@@ -360,6 +360,11 @@ class PasswordChangeWindow(QWidget):
             QMessageBox.warning(self, 'Ошибка', message)
 
 class AdminMainWindow(QMainWindow):
+    def __init__(self, db_manager, user):
+        super().__init__()
+        self.db_manager = db_manager
+        self.user = user
+        self.init_ui()
     def init_ui(self):
         self.setWindowTitle('Панель администратора')
         self.setMinimumSize(800, 600)
