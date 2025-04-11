@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton,
                              QVBoxLayout, QMessageBox, QGridLayout)
 
-import PasswordChangeWindow
+from PasswordChangeWindow import PasswordChangeWindow
 from AdminMainWindow import AdminMainWindow
 from UserMainWindow import UserMainWindow
 
@@ -47,30 +47,34 @@ class LoginWindow(QWidget):
         login = self.login_input.text()
         password = self.password_input.text()
 
-        # Проверка заполнения полей
-        if not login or not password:
-            QMessageBox.warning(self, 'Ошибка', 'Необходимо заполнить все поля')
-            return
+        try:
 
-        # Аутентификация
-        user, status = self.db_manager.authenticate_user(login, password)
+            # Проверка заполнения полей
+            if not login or not password:
+                QMessageBox.warning(self, 'Ошибка', 'Необходимо заполнить все поля')
+                return
 
-        if status == "blocked":
-            QMessageBox.critical(self, 'Ошибка', 'Вы заблокированы. Обратитесь к администратору')
-        elif status == "invalid":
-            QMessageBox.warning(self, 'Ошибка',
-                                'Вы ввели неверный логин или пароль. Пожалуйста проверьте ещё раз введенные данные')
-        elif status == "success":
-            QMessageBox.information(self, 'Успех', 'Вы успешно авторизовались')
+            # Аутентификация
+            user, status = self.db_manager.authenticate_user(login, password)
 
-            # Проверка необходимости смены пароля
-            if user['password_change_required']:
-                self.password_change_window = PasswordChangeWindow(self.db_manager, user['id'])
-                self.password_change_window.show()
-                self.password_change_window.password_changed.connect(self.on_password_changed)
-                self.hide()
-            else:
-                self.open_main_window(user)
+            if status == "blocked":
+                QMessageBox.critical(self, 'Ошибка', 'Вы заблокированы. Обратитесь к администратору')
+            elif status == "invalid":
+                QMessageBox.warning(self, 'Ошибка',
+                                    'Вы ввели неверный логин или пароль. Пожалуйста проверьте ещё раз введенные данные')
+            elif status == "success":
+                QMessageBox.information(self, 'Успех', 'Вы успешно авторизовались')
+
+                # Проверка необходимости смены пароля
+                if user['password_change_required']:
+                    self.password_change_window = PasswordChangeWindow(self.db_manager, user['id'])
+                    self.password_change_window.show()
+                    self.password_change_window.password_changed.connect(self.on_password_changed)
+                    self.hide()
+                else:
+                    self.open_main_window(user)
+        except Exception as e:
+            print (e)
 
     def on_password_changed(self, success):
         if success:

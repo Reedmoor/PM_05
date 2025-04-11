@@ -133,6 +133,7 @@ class DatabaseManager:
 
     def add_user(self, login, password, role):
         cursor = self.conn.cursor()
+        current_time = datetime.datetime.now()
 
         # Проверяем, существует ли пользователь
         cursor.execute("SELECT COUNT(*) FROM users WHERE login = %s", (login,))
@@ -142,8 +143,8 @@ class DatabaseManager:
 
         # Добавляем пользователя
         cursor.execute(
-            "INSERT INTO users (login, password, role, password_change_required) VALUES (%s, %s, %s, TRUE)",
-            (login, password, role)
+            "INSERT INTO users (login, password, role, password_change_required, last_login) VALUES (%s, %s, %s, TRUE, %s)",
+            (login, password, role, current_time)
         )
 
         self.conn.commit()
